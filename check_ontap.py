@@ -9,7 +9,7 @@ texto = pagina.text
 
 versiones = re.findall(r'9.16.1Pd+', texto)
 
-if not versiones
+if not versiones :
     print(No se encontró ninguna versión)
     exit()
 
@@ -21,7 +21,7 @@ with open(ultima_version.txt) as f
 print(Instalada, instalada)
 print(Disponible, ultima)
 
-if instalada != ultima
+if instalada != ultima :
     print(Nueva versión encontrada)
 
     with open(ultima_version.txt,w) as f
