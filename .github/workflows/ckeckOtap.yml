@@ -10,14 +10,27 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Actualizado a v4.2.2 para compatibilidad interna con Node 24
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v4
 
-      # Actualizado a v6 para usar por defecto el entorno Node moderno
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
-      - run: pip install -r requirements.txt
+      # ESTE PASO ES CLAVE: Instala BeautifulSoup y Requests en GitHub
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - run: python check_ontap.py
+      - id: run_script
+        run: python check_ontap.py
+
+      # Paso para guardar la versión de vuelta en el repositorio si cambia
+      - name: Guardar nueva versión en el repositorio
+        if: steps.run_script.outputs.actualizado == 'true'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add ultima_version.txt
+          git commit -m "chore: actualizar registro a versión ${{ steps.run_script.outputs.version }}"
+          git push
