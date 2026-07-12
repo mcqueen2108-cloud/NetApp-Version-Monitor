@@ -47,11 +47,12 @@ jobs:
             El repositorio ha sido actualizado automáticamente con este registro.
 
       # Guarda la nueva versión en tu archivo de texto del repositorio
+   # Guarda la nueva versión en tu archivo de texto del repositorio (CORREGIDO)
       - name: Guardar nueva versión en el repositorio
         if: steps.run_script.outputs.actualizado == 'true'
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          git config --global user.name "GitHub Action"
           git add ultima_version.txt
           git commit -m "chore: actualizar registro a versión ${{ steps.run_script.outputs.version }}"
           git push
