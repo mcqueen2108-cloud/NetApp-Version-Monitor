@@ -2,8 +2,8 @@ name: Check NetApp Version
 
 on:
   schedule:
-    - cron: '0 13 * * *'
-  workflow_dispatch:
+    - cron: '0 13 * * *'  # Revisa todos los días
+  workflow_dispatch:      # Permite botón manual
 
 jobs:
   check:
@@ -16,17 +16,15 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Instala BeautifulSoup y Requests
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Ejecuta el script y guarda las salidas en 'steps.run_script.outputs'
       - id: run_script
         run: python check_ontap.py
 
-      # PASO DEL CORREO: Se ejecuta SOLO si el script detectó actualización
+      # Envía el correo avisándote que hay algo nuevo por instalar
       - name: Enviar correo de notificación
         if: steps.run_script.outputs.actualizado == 'true'
         uses: dawidd6/action-send-mail@v4
@@ -36,23 +34,12 @@ jobs:
           secure: true
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: '¡Alerta NetApp! Nueva versión disponible: ${{ steps.run_script.outputs.version }}'
+          subject: '¡Alerta NetApp! Nueva versión disponible en la Web: ${{ steps.run_script.outputs.version }}'
           to: ${{ secrets.EMAIL_USERNAME }}
           from: 'NetApp Version Monitor'
           body: |
-            Se ha detectado una nueva actualización en la página oficial de NetApp ONTAP.
+            Hola,
             
-            - Versión disponible: ${{ steps.run_script.outputs.version }}
+            Se ha detectado que NetApp publicó una nueva versión: ${{ steps.run_script.outputs.version }}.
             
-            El repositorio ha sido actualizado automáticamente con este registro.
-
-      # Guarda la nueva versión en tu archivo de texto del repositorio
-   # Guarda la nueva versión en tu archivo de texto del repositorio (CORREGIDO)
-      - name: Guardar nueva versión en el repositorio
-        if: steps.run_script.outputs.actualizado == 'true'
-        run: |
-          git config --global user.email "action@github.com"
-          git config --global user.name "GitHub Action"
-          git add ultima_version.txt
-          git commit -m "chore: actualizar registro a versión ${{ steps.run_script.outputs.version }}"
-          git push
+            Tu repositorio sigue marcado con la versión anterior porque no la has instalado. Una vez que la instales en tu infraestructura, recuerda actualizar el archivo 'ultima_version.txt' en GitHub de forma manual.
