@@ -16,16 +16,37 @@ jobs:
         with:
           python-version: '3.12'
 
-      # ESTE PASO ES CLAVE: Instala BeautifulSoup y Requests en GitHub
+      # Instala BeautifulSoup y Requests
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Ejecuta el script y guarda las salidas en 'steps.run_script.outputs'
       - id: run_script
         run: python check_ontap.py
 
-      # Paso para guardar la versión de vuelta en el repositorio si cambia
+      # PASO DEL CORREO: Se ejecuta SOLO si el script detectó actualización
+      - name: Enviar correo de notificación
+        if: steps.run_script.outputs.actualizado == 'true'
+        uses: dawidd6/action-send-mail@v4
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: '¡Alerta NetApp! Nueva versión disponible: ${{ steps.run_script.outputs.version }}'
+          to: ${{ secrets.EMAIL_USERNAME }}
+          from: 'NetApp Version Monitor'
+          body: |
+            Se ha detectado una nueva actualización en la página oficial de NetApp ONTAP.
+            
+            - Versión disponible: ${{ steps.run_script.outputs.version }}
+            
+            El repositorio ha sido actualizado automáticamente con este registro.
+
+      # Guarda la nueva versión en tu archivo de texto del repositorio
       - name: Guardar nueva versión en el repositorio
         if: steps.run_script.outputs.actualizado == 'true'
         run: |
