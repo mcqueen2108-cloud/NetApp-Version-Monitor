@@ -4,9 +4,8 @@ import os
 from bs4 import BeautifulSoup
 
 # URL de la documentación de NetApp ONTAP
-URL = "https://mysupport.netapp.com/site/products/all/details/ontap9/downloads-tab"
+URL = "https://docs.netapp.com/us-en/ontap/release-notes/index.html"
 
-# Cabecera para simular un navegador web y evitar bloqueos
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
@@ -18,31 +17,40 @@ except Exception as e:
     print(f"Error al conectar con la página: {e}")
     exit()
 
-# Analizamos el HTML completo para buscar en el texto y también en las URLs de los enlaces (href)
 soup = BeautifulSoup(html_content, 'html.parser')
 todo_el_texto = soup.get_text()
 enlaces = [a.get('href', '') for a in soup.find_all('a')]
 
-# Juntamos todo para asegurarnos de capturar parches que estén ocultos en botones o menús
+# Combinamos todo el texto visible y las URLs de los enlaces
 texto_a_buscar = todo_el_texto + " " + " ".join(enlaces)
 
-# REGEX DINÁMICA: Busca cualquier versión 9.X.X seguido opcionalmente de espacios/guiones y el parche P
-# Ejemplo: Captura '9.16.1P13', '9.16.1 P13', '9.16.2-P1', etc.
-patron = r'9\.\d+\.\d+(?:\s*|-*)P\d+'
-hallazgos = re.findall(patron, texto_a_buscar, re.IGNORECASE)
+# REGEX ULTRA FLEXIBLE:
+# Captura patrones tipo 9.16.1P13, 9.16.1 P13, 9.16.1-P13, e incluso si solo encuentra 9.16.1 de forma general
+patron_con_p = r'9\.\d+\.\d+(?:\s*|-*)[pP]\d+'
+hallazgos = re.findall(patron_con_p, texto_a_buscar)
+
+# PLAN DE RESPALDO: Si no encuentra ninguna versión con "P", busca la versión general (ej. 9.16.1)
+if not hallazgos:
+    print("No se encontró formato con 'P', buscando versión general...")
+    patron_general = r'9\.\d+\.\d+'
+    hallazgos = re.findall(patron_general, texto_a_buscar)
 
 if not hallazgos:
-    print("No se encontró ninguna versión con parche P en la página.")
+    print("No se encontró ninguna versión de la rama 9 en la página.")
     exit()
 
-# Limpieza y normalización: Convertimos cualquier variante como '9.16.1-P13' en '9.16.1P13'
+# Limpieza y normalización de las versiones encontradas
 versiones_limpias = []
 for v in hallazgos:
-    v_normalizada = re.sub(r'(?:\s*|-*)P', 'P', v.upper())
-    versiones_limpias.append(v_normalizada)
+    # Si contiene una P, la normalizamos a formato limpio (ej. 9.16.1P13)
+    if 'p' in v.lower():
+        v_normalizada = re.sub(r'(?:\s*|-*)[pP]', 'P', v)
+        versiones_limpias.append(v_normalizada)
+    else:
+        # Si es versión general, le añadimos un parche P0 inicial por defecto para poder comparar numéricamente
+        versiones_limpias.append(f"{v}P0")
 
-# FUNCIÓN DE ORDENAMIENTO COMPONENTE POR COMPONENTE:
-# Convierte '9.16.1P13' en una tupla de números enteros (9, 16, 1, 13) para que Python sepa ordenarlo lógicamente
+# FUNCIÓN DE ORDENAMIENTO COMPONENTE POR COMPONENTE
 def clave_ordenamiento(v):
     numeros = re.findall(r'\d+', v)
     return tuple(int(n) for n in numeros)
@@ -50,7 +58,6 @@ def clave_ordenamiento(v):
 # Obtenemos la versión más reciente absoluta de la Web
 ultima = sorted(list(set(versiones_limpias)), key=clave_ordenamiento)[-1]
 
-# Intentamos leer la última versión que teníamos registrada localmente
 try:
     with open("ultima_version.txt") as f:
         instalada = f.read().strip()
@@ -62,9 +69,8 @@ print("Versión más reciente detectada en la Web:", ultima)
 
 hay_actualizacion = "false"
 
-# Si es una versión nueva (o si el archivo estaba vacío), actualizamos el registro
 if instalada != ultima:
-    print(f"¡Nueva ramificación/parche encontrado: {ultima}!")
+    print(f"¡Nueva actualización/parche encontrado: {ultima}!")
     hay_actualizacion = "true"
 
     with open("ultima_version.txt", "w") as f:
