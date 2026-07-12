@@ -1,75 +1,60 @@
 import requests
 import re
 import os
-from bs4 import BeautifulSoup
 
-URL = "https://mysupport.netapp.com/site/products/all/details/ontap9/downloads-tab"
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
-
-try:
-    pagina = requests.get(URL, headers=headers, timeout=15)
-    html_content = pagina.text
-except Exception as e:
-    print(f"Error al conectar con la página: {e}")
-    exit()
-
-soup = BeautifulSoup(html_content, 'html.parser')
-
-# Extraemos texto y enlaces relevantes
-textos = [soup.get_text()]
-for tag in soup.find_all(['a', 'title', 'meta']):
-    textos.append(tag.get_text())
-    if tag.get('href'):
-        textos.append(tag.get('href'))
-
-texto_a_buscar = " ".join(textos)
-
-# Regex estricta para buscar los parches de la rama 9.16.1
-patron_con_p = r'9\.16\.1(?:\s*|-*)[pP](\d+)'
-hallazgos_p = re.findall(patron_con_p, texto_a_buscar)
-
-if hallazgos_p:
-    max_p = max(int(p) for p in hallazgos_p)
-    ultima_web = f"9.16.1P{max_p}"
-else:
-    # Si la web no expone el parche dinámicamente en el índice, usamos el último conocido
-    print("No se visualizaron parches dinámicos con 'P' en el índice general.")
-    ultima_web = "9.16.1P11" 
-
-# --- AQUÍ CORREGIMOS EL NOMBRE DE TU ARCHIVO ---
+# --- CONFIGURACIÓN ---
 archivo_registro = "NetApp-Version-Monitor.txt"
 
+# Leer la versión que tú tienes registrada actualmente en tu repositorio
 try:
     with open(archivo_registro) as f:
         instalada = f.read().strip()
 except FileNotFoundError:
-    instalada = "" 
+    instalada = "9.16.1P11"  # Valor por defecto si se borra el archivo
 
 print(f"Tu versión registrada en {archivo_registro}: {instalada}")
-print("Versión detectada/asignada para la Web:", ultima_web)
+
+# Extraer el número actual de parche P que tienes guardado (ej: de '9.16.1P11' extrae el 11)
+match_instalada = re.search(r'[pP](\d+)', instalada)
+parche_actual = int(match_instalada.group(1)) if match_instalada else 11
+
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+}
+
+print(f"Buscando si existen parches superiores a la P{parche_actual} en la web de NetApp...")
+
+# Probamos los siguientes parches de forma ascendente (ej: si tienes P11, probará P12, P13, P14...)
+parche_detectado = parche_actual
+for intento in range(parche_actual + 1, parche_actual + 5):
+    # Validamos si existe la URL específica de soporte/documentación para este parche
+    url_prueba = f"https://docs.netapp.com/us-en/ontap/release-notes/changes-resolved-issues-9161p{intento}.html"
+    
+    try:
+        respuesta = requests.head(url_prueba, headers=headers, timeout=10)
+        # Si la página existe (código 200) significa que NetApp liberó y documentó ese parche
+        if respuesta.status_code == 200:
+            print(f"-> ¡Detectado parche activo en la web!: 9.16.1P{intento}")
+            parche_detectado = intento
+        else:
+            # Si da 404 u otro error, es que ese parche aún no se publica o no tiene documentación pública
+            break
+    except Exception:
+        break
+
+ultima_web = f"9.16.1P{parche_detectado}"
+print(f"Versión final determinada de la Web: {ultima_web}")
 
 hay_actualizacion = "false"
 
-# Si el archivo está alineado con la web, no hace nada
-if instalada == ultima_web:
-    print("Todo al día. Tu infraestructura está alineada con la versión detectada.")
-elif instalada == "":
-    print(f"El archivo '{archivo_registro}' está vacío o no se encuentra. No se enviará alerta.")
+# Comparamos el parche que descubrimos contra el que tú tienes instalado
+if parche_detectado > parche_actual:
+    print(f"¡Nueva actualización real detectada en la Web!: {ultima_web}")
+    hay_actualizacion = "true"
 else:
-    # Si hay una diferencia, extraemos el número del parche para validar que sea mayor
-    def extraer_numero_p(v):
-        match = re.search(r'[pP](\d+)', v)
-        return int(match.group(1)) if match else 0
+    print("Todo al día. Tu infraestructura está alineada con la versión detectada.")
 
-    if extraer_numero_p(ultima_web) > extraer_numero_p(instalada):
-        print(f"¡Nueva actualización real detectada en la Web: {ultima_web}!")
-        hay_actualizacion = "true"
-    else:
-        print("La versión de la web es igual o menor a la registrada. No se requiere acción.")
-
-# Pasamos las variables a GitHub Actions
+# Pasamos los resultados a GitHub Actions
 if "GITHUB_OUTPUT" in os.environ:
     with open(os.environ["GITHUB_OUTPUT"], "a") as env:
         env.write(f"actualizado={hay_actualizacion}\n")
