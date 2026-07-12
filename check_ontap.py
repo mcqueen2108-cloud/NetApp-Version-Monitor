@@ -4,7 +4,7 @@ import os
 from bs4 import BeautifulSoup
 
 # URL de la documentación de NetApp ONTAP
-URL = "https://docs.netapp.com/us-en/ontap/release-notes/index.html"
+URL = "https://mysupport.netapp.com/site/products/all/details/ontap9/downloads-tab"
 
 # Cabecera para simular un navegador web y evitar bloqueos
 headers = {
