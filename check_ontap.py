@@ -3,7 +3,7 @@ import re
 import os
 from bs4 import BeautifulSoup
 
-URL = "https://docs.netapp.com/us-en/ontap/release-notes/index.html"
+URL = "https://mysupport.netapp.com/site/products/all/details/ontap9/downloads-tab"
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
