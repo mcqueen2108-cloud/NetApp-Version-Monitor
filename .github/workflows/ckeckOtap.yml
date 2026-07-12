@@ -10,9 +10,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      # Actualizado a v4.2.2 para compatibilidad interna con Node 24
+      - uses: actions/checkout@v4.2.2
 
-      - uses: actions/setup-python@v5
+      # Actualizado a v6 para usar por defecto el entorno Node moderno
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
