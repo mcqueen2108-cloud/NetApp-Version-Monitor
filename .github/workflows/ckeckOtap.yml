@@ -21,6 +21,9 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps chromium
+
       - id: run_script
         run: python check_ontap.py
 
@@ -42,4 +45,4 @@ jobs:
             
             Se ha detectado que NetApp publicó una nueva versión: ${{ steps.run_script.outputs.version }}.
             
-            Tu repositorio sigue marcado con la versión anterior porque no la has instalado. Una vez que la instales en tu infraestructura, recuerda actualizar el archivo 'ultima_version.txt' en GitHub de forma manual.
+            Tu repositorio sigue marcado con la versión anterior porque no la has instalado. Una vez que la instales en tu infraestructura, recuerda actualizar el archivo 'NetApp-Version-Monitor.txt' en GitHub de forma manual.
