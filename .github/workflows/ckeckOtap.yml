@@ -27,6 +27,17 @@ jobs:
       - id: run_script
         run: python check_ontap.py
 
+      # Sube evidencia de lo que vio el navegador (screenshot, HTML, texto)
+      # sin importar si el script tuvo éxito o falló. Útil para diagnosticar
+      # si NetApp cambia el markup de la página.
+      - name: Subir evidencia de depuración
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-output
+          path: debug_output/
+          retention-days: 7
+
       # Envía el correo avisándote que hay algo nuevo por instalar
       - name: Enviar correo de notificación
         if: steps.run_script.outputs.actualizado == 'true'
