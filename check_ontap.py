@@ -1,82 +1,118 @@
-import requests
 import re
 import os
-from bs4 import BeautifulSoup
+import sys
+from playwright.sync_api import sync_playwright
 
-# URL del canal RSS / Atom público de novedades de documentación de NetApp
-URL = "https://docs.netapp.com/us-en/ontap/whats-new.xml" # O el índice de cambios global
-# Si no responde el XML, usamos la página principal de "Qué hay de nuevo" que es HTML público
 URL_HTML = "https://mysupport.netapp.com/site/products/all/details/ontap9/downloads-tab"
 
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-}
+# Solo nos interesa la rama 9.16.1PX
+RAMA = "9.16.1"
+PATRON = re.compile(rf'{re.escape(RAMA)}(?:[pP]|\s+[pP]|-+[pP])(\d+)')
 
-print("Conectando con el sitio de documentación de NetApp...")
-try:
-    # Leemos la página principal de notas
-    pagina = requests.get(URL_HTML, headers=headers, timeout=15)
-    html_content = pagina.text
-except Exception as e:
-    print(f"Error al conectar: {e}")
-    exit()
+ARCHIVO_REGISTRO = "NetApp-Version-Monitor.txt"
 
-# Si NetApp oculta los parches en el HTML principal, usualmente los deja expuestos en sus enlaces de descarga
-# Vamos a buscar de forma más agresiva en TODO el texto de la página buscando el patrón 9.16.1PXX
-soup = BeautifulSoup(html_content, 'html.parser')
-texto_completo = soup.get_text() + " " + " ".join([str(tag) for tag in soup.find_all(True)])
 
-# Buscamos cualquier coincidencia de 9.16.1 seguido de P y números
-patron = r'9\.16\.1(?:[pP]|\s+[pP]|-+[pP])(\d+)'
-parches_encontrados = re.findall(patron, texto_completo)
+def obtener_texto_renderizado(url: str) -> str:
+    """
+    mysupport.netapp.com es una SPA (Angular): el HTML crudo llega vacío
+    ("Loading..."). Necesitamos un navegador real (headless) para que el
+    JavaScript pinte el contenido antes de leerlo.
+    """
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+            )
+        )
+        page.goto(url, timeout=30000, wait_until="networkidle")
 
-# --- ESTRATEGIA DE SEGURIDAD INTERNA ---
-# Como confirmas que la versión real en producción actual ya va en la P13,
-# si la web pública está lenta en actualizar su texto, forzamos un validador inteligente.
-parche_maximo_web = 11 # Base conocida
+        # Espera activa a que aparezca contenido real (no solo "Loading...")
+        try:
+            page.wait_for_function(
+                "document.body.innerText.length > 500",
+                timeout=20000,
+            )
+        except Exception:
+            pass  # seguimos igual; si no hay contenido, el regex simplemente no encontrará nada
 
-if parches_encontrados:
-    parche_maximo_web = max(int(p) for p in parches_encontrados)
-    # Si la web reporta algo menor a la realidad actual (P13), nos protegemos y usamos el valor real
-    if parche_maximo_web < 13:
-        parche_maximo_web = 13
-else:
-    # Si la página web no tiene escrito el parche de ninguna forma hoy, usamos la P13 real
-    parche_maximo_web = 13
+        # Pequeño margen extra para que terminen de pintarse listas/dropdowns
+        page.wait_for_timeout(2000)
 
-ultima_web = f"9.16.1P{parche_maximo_web}"
+        texto = page.inner_text("body")
+        browser.close()
+        return texto
 
-# --- LEER TU ARCHIVO DE REPOSITORIO ---
-archivo_registro = "NetApp-Version-Monitor.txt"
 
-try:
-    with open(archivo_registro) as f:
-        instalada = f.read().strip()
-except FileNotFoundError:
-    instalada = ""
+def extraer_parches(texto: str):
+    return [int(p) for p in PATRON.findall(texto)]
 
-print(f"Tu versión registrada en el repositorio ({archivo_registro}): {instalada}")
-print(f"Versión detectada en la Web / Validada: {ultima_web}")
 
-hay_actualizacion = "false"
+def leer_version_registrada(path: str) -> str:
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""
 
-# Si tu archivo está vacío, significa que es la primera vez o se reinició el flujo
-if instalada == "":
-    print("El archivo de registro está vacío. No se enviará alerta hasta que guardes una versión inicial.")
-else:
-    # Extraemos los números para comparar matemáticamente
-    match_instalada = re.search(r'[pP](\d+)', instalada)
-    num_instalada = int(match_instalada.group(1)) if match_instalada else 0
-    
-    # Comparamos si la versión de afuera (Web) es mayor que la que tú tienes guardada en GitHub
-    if parche_maximo_web > num_instalada:
-        print(f"¡Nueva versión superior detectada en la Web!: {ultima_web}")
-        hay_actualizacion = "true"
+
+def escribir_output_github(actualizado: str, version: str):
+    if "GITHUB_OUTPUT" in os.environ:
+        with open(os.environ["GITHUB_OUTPUT"], "a") as env:
+            env.write(f"actualizado={actualizado}\n")
+            env.write(f"version={version}\n")
+
+
+def main():
+    print(f"Conectando (con navegador headless) a: {URL_HTML}")
+    try:
+        texto = obtener_texto_renderizado(URL_HTML)
+    except Exception as e:
+        print(f"ERROR al renderizar la página: {e}")
+        # No hacemos fallback silencioso a ningún valor inventado.
+        # Si el chequeo falla, el workflow debe fallar (visible en Actions),
+        # NO reportar falsamente "todo al día".
+        sys.exit(1)
+
+    parches_encontrados = extraer_parches(texto)
+
+    if not parches_encontrados:
+        print(
+            f"No se encontró ningún parche de la rama {RAMA} en la página renderizada. "
+            "Esto puede indicar que NetApp cambió el markup del sitio, o que la "
+            "página no cargó completamente."
+        )
+        sys.exit(1)
+
+    parche_maximo_web = max(parches_encontrados)
+    ultima_web = f"{RAMA}P{parche_maximo_web}"
+
+    instalada = leer_version_registrada(ARCHIVO_REGISTRO)
+
+    print(f"Tu versión registrada en el repositorio ({ARCHIVO_REGISTRO}): {instalada or '(vacío)'}")
+    print(f"Última versión detectada en la Web para la rama {RAMA}: {ultima_web}")
+
+    hay_actualizacion = "false"
+
+    if instalada == "":
+        print("El archivo de registro está vacío. No se enviará alerta hasta que guardes una versión inicial.")
     else:
-        print("Todo al día. No hay parches más nuevos que los que tienes registrados.")
+        match_instalada = re.search(r'[pP](\d+)', instalada)
+        if not match_instalada:
+            print(f"ADVERTENCIA: no pude interpretar el número de parche en '{instalada}'.")
+            sys.exit(1)
 
-# Pasamos los datos al flujo de GitHub Actions
-if "GITHUB_OUTPUT" in os.environ:
-    with open(os.environ["GITHUB_OUTPUT"], "a") as env:
-        env.write(f"actualizado={hay_actualizacion}\n")
-        env.write(f"version={ultima_web}\n")
+        num_instalada = int(match_instalada.group(1))
+
+        if parche_maximo_web > num_instalada:
+            print(f"¡Nueva versión superior detectada en la Web!: {ultima_web}")
+            hay_actualizacion = "true"
+        else:
+            print("Todo al día. No hay parches más nuevos que los que tienes registrados.")
+
+    escribir_output_github(hay_actualizacion, ultima_web)
+
+
+if __name__ == "__main__":
+    main()
