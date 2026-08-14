@@ -12,12 +12,23 @@ PATRON = re.compile(rf'{re.escape(RAMA)}(?:[pP]|\s+[pP]|-+[pP])(\d+)')
 ARCHIVO_REGISTRO = "NetApp-Version-Monitor.txt"
 
 
+DEBUG_DIR = "debug_output"
+
+
 def obtener_texto_renderizado(url: str) -> str:
     """
     mysupport.netapp.com es una SPA (Angular): el HTML crudo llega vacío
     ("Loading..."). Necesitamos un navegador real (headless) para que el
     JavaScript pinte el contenido antes de leerlo.
+
+    IMPORTANTE: no usamos wait_until="networkidle" porque este tipo de sitios
+    (analytics, polling, chat widgets, etc.) casi nunca dejan de tener
+    actividad de red, así que networkidle nunca se cumple y siempre truena
+    en timeout. En su lugar: cargamos con "domcontentloaded" (rápido) y
+    luego esperamos activamente a que el contenido real aparezca en el DOM.
     """
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(
@@ -26,21 +37,45 @@ def obtener_texto_renderizado(url: str) -> str:
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
             )
         )
-        page.goto(url, timeout=30000, wait_until="networkidle")
 
-        # Espera activa a que aparezca contenido real (no solo "Loading...")
+        page.goto(url, timeout=60000, wait_until="domcontentloaded")
+
+        # Esperamos activamente a que el contenido real de la SPA se pinte.
+        # Si en 45s no aparece suficiente texto, seguimos de todas formas:
+        # guardamos evidencia (screenshot + html) para poder diagnosticar.
+        contenido_cargo = True
         try:
             page.wait_for_function(
-                "document.body.innerText.length > 500",
-                timeout=20000,
+                "document.body.innerText.length > 800",
+                timeout=45000,
             )
         except Exception:
-            pass  # seguimos igual; si no hay contenido, el regex simplemente no encontrará nada
+            contenido_cargo = False
 
-        # Pequeño margen extra para que terminen de pintarse listas/dropdowns
-        page.wait_for_timeout(2000)
+        # Margen extra por si hay animaciones/renderizado tardío de listas
+        page.wait_for_timeout(3000)
 
         texto = page.inner_text("body")
+
+        # --- Evidencia de depuración, siempre se guarda ---
+        try:
+            page.screenshot(path=os.path.join(DEBUG_DIR, "pagina.png"), full_page=True)
+        except Exception as e:
+            print(f"No se pudo tomar screenshot: {e}")
+
+        try:
+            with open(os.path.join(DEBUG_DIR, "pagina.html"), "w", encoding="utf-8") as f:
+                f.write(page.content())
+        except Exception as e:
+            print(f"No se pudo guardar el HTML: {e}")
+
+        with open(os.path.join(DEBUG_DIR, "texto_visible.txt"), "w", encoding="utf-8") as f:
+            f.write(texto)
+
+        if not contenido_cargo:
+            print("ADVERTENCIA: el contenido tardó más de lo esperado en aparecer; "
+                  "revisa debug_output/ para ver qué se alcanzó a renderizar.")
+
         browser.close()
         return texto
 
