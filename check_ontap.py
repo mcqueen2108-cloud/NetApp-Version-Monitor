@@ -10,74 +10,103 @@ RAMA = "9.16.1"
 PATRON = re.compile(rf'{re.escape(RAMA)}(?:[pP]|\s+[pP]|-+[pP])(\d+)')
 
 ARCHIVO_REGISTRO = "NetApp-Version-Monitor.txt"
-
-
 DEBUG_DIR = "debug_output"
 
 
-def obtener_texto_renderizado(url: str) -> str:
-    """
-    mysupport.netapp.com es una SPA (Angular): el HTML crudo llega vacío
-    ("Loading..."). Necesitamos un navegador real (headless) para que el
-    JavaScript pinte el contenido antes de leerlo.
+def guardar_evidencia(page, sufijo: str):
+    """Guarda screenshot + HTML + texto visible con un sufijo, para depurar cada etapa."""
+    try:
+        page.screenshot(path=os.path.join(DEBUG_DIR, f"pagina_{sufijo}.png"), full_page=True)
+    except Exception as e:
+        print(f"No se pudo tomar screenshot ({sufijo}): {e}")
+    try:
+        with open(os.path.join(DEBUG_DIR, f"pagina_{sufijo}.html"), "w", encoding="utf-8") as f:
+            f.write(page.content())
+    except Exception as e:
+        print(f"No se pudo guardar el HTML ({sufijo}): {e}")
+    try:
+        texto = page.inner_text("body")
+        with open(os.path.join(DEBUG_DIR, f"texto_{sufijo}.txt"), "w", encoding="utf-8") as f:
+            f.write(texto)
+        return texto
+    except Exception as e:
+        print(f"No se pudo capturar texto ({sufijo}): {e}")
+        return ""
 
-    IMPORTANTE: no usamos wait_until="networkidle" porque este tipo de sitios
-    (analytics, polling, chat widgets, etc.) casi nunca dejan de tener
-    actividad de red, así que networkidle nunca se cumple y siempre truena
-    en timeout. En su lugar: cargamos con "domcontentloaded" (rápido) y
-    luego esperamos activamente a que el contenido real aparezca en el DOM.
+
+def cerrar_banner_cookies(page):
     """
+    El banner de cookies de NetApp vive aparentemente en un shadow DOM cerrado
+    (no aparece en innerText del body). Probamos varias estrategias, cada una
+    con timeout corto, sin fallar el script si ninguna funciona.
+    """
+    estrategias = [
+        lambda: page.get_by_role("button", name="Accept all").click(timeout=4000),
+        lambda: page.get_by_text("Accept all", exact=True).click(timeout=4000),
+        lambda: page.locator("button:has-text('Accept all')").first.click(timeout=4000),
+    ]
+    for estrategia in estrategias:
+        try:
+            estrategia()
+            print("Banner de cookies cerrado.")
+            return True
+        except Exception:
+            continue
+
+    # Último recurso: clic por coordenadas fijas, basado en el layout visto
+    # en el screenshot de depuración (viewport 1280x720 por defecto de Playwright).
+    try:
+        page.mouse.click(391, 623)
+        print("Intenté cerrar el banner de cookies por coordenadas (último recurso).")
+        return True
+    except Exception as e:
+        print(f"No se pudo cerrar el banner de cookies por ninguna vía: {e}")
+        return False
+
+
+def obtener_texto_renderizado(url: str) -> str:
     os.makedirs(DEBUG_DIR, exist_ok=True)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(
+            viewport={"width": 1280, "height": 720},
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
-            )
+            ),
         )
 
         page.goto(url, timeout=60000, wait_until="domcontentloaded")
 
-        # Esperamos activamente a que el contenido real de la SPA se pinte.
-        # Si en 45s no aparece suficiente texto, seguimos de todas formas:
-        # guardamos evidencia (screenshot + html) para poder diagnosticar.
-        contenido_cargo = True
         try:
-            page.wait_for_function(
-                "document.body.innerText.length > 800",
-                timeout=45000,
-            )
+            page.wait_for_function("document.body.innerText.length > 300", timeout=30000)
         except Exception:
-            contenido_cargo = False
+            pass
 
-        # Margen extra por si hay animaciones/renderizado tardío de listas
-        page.wait_for_timeout(3000)
+        page.wait_for_timeout(2000)
+        guardar_evidencia(page, "01_inicial")
 
-        texto = page.inner_text("body")
+        cerrar_banner_cookies(page)
+        page.wait_for_timeout(1000)
+        guardar_evidencia(page, "02_post_cookies")
 
-        # --- Evidencia de depuración, siempre se guarda ---
+        # Buscar y usar el campo de filtro de versión
+        texto_final = ""
         try:
-            page.screenshot(path=os.path.join(DEBUG_DIR, "pagina.png"), full_page=True)
+            campo = page.locator("#filterInput")
+            campo.wait_for(state="visible", timeout=15000)
+            campo.click()
+            campo.type(RAMA, delay=120)  # delay simula tecleo real para disparar el binding de Angular
+            page.wait_for_timeout(2500)  # margen para que cargue el autocompletar
+            texto_final = guardar_evidencia(page, "03_post_busqueda")
         except Exception as e:
-            print(f"No se pudo tomar screenshot: {e}")
-
-        try:
-            with open(os.path.join(DEBUG_DIR, "pagina.html"), "w", encoding="utf-8") as f:
-                f.write(page.content())
-        except Exception as e:
-            print(f"No se pudo guardar el HTML: {e}")
-
-        with open(os.path.join(DEBUG_DIR, "texto_visible.txt"), "w", encoding="utf-8") as f:
-            f.write(texto)
-
-        if not contenido_cargo:
-            print("ADVERTENCIA: el contenido tardó más de lo esperado en aparecer; "
-                  "revisa debug_output/ para ver qué se alcanzó a renderizar.")
+            print(f"No se pudo interactuar con el campo de versión (#filterInput): {e}")
+            # seguimos con lo que tengamos del paso anterior como último recurso
+            texto_final = page.inner_text("body")
 
         browser.close()
-        return texto
+        return texto_final
 
 
 def extraer_parches(texto: str):
@@ -105,9 +134,6 @@ def main():
         texto = obtener_texto_renderizado(URL_HTML)
     except Exception as e:
         print(f"ERROR al renderizar la página: {e}")
-        # No hacemos fallback silencioso a ningún valor inventado.
-        # Si el chequeo falla, el workflow debe fallar (visible en Actions),
-        # NO reportar falsamente "todo al día".
         sys.exit(1)
 
     parches_encontrados = extraer_parches(texto)
@@ -115,8 +141,8 @@ def main():
     if not parches_encontrados:
         print(
             f"No se encontró ningún parche de la rama {RAMA} en la página renderizada. "
-            "Esto puede indicar que NetApp cambió el markup del sitio, o que la "
-            "página no cargó completamente."
+            "Revisa los archivos en debug_output/ (paso 03_post_busqueda) para ver "
+            "qué se alcanzó a mostrar tras escribir en el campo de versión."
         )
         sys.exit(1)
 
